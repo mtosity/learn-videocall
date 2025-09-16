@@ -30,6 +30,7 @@ type Room struct {
 
 type ClientInfo struct {
 	ID       string    `json:"id"`
+	Name     string    `json:"name"`
 	Conn     *websocket.Conn `json:"-"`
 	JoinedAt time.Time `json:"joinedAt"`
 }
@@ -39,6 +40,8 @@ type Message struct {
 	Data     interface{} `json:"data"`
 	RoomID   string      `json:"roomId,omitempty"`
 	ClientID string      `json:"clientId,omitempty"`
+	ClientName string    `json:"clientName,omitempty"`
+	TargetID string      `json:"targetId,omitempty"`
 }
 
 var rooms = make(map[string]*Room)
@@ -66,7 +69,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 func handleMessage(conn *websocket.Conn, msg Message) {
 	switch msg.Type {
 	case "join-room":
-		joinRoom(conn, msg.RoomID)
+		joinRoom(conn, msg.RoomID, msg.ClientID, msg.ClientName)
 	case "offer":
 		relayMessage(msg)
 	case "answer":
@@ -78,9 +81,9 @@ func handleMessage(conn *websocket.Conn, msg Message) {
 	}
 }
 
-func joinRoom(conn *websocket.Conn, roomID string) {
+func joinRoom(conn *websocket.Conn, roomID string, clientID string, clientName string) {
 	if room, exists := rooms[roomID]; exists {
-		room.Register <- conn
+		registerClientToRoom(room, conn, clientID, clientName)
 	} else {
 		// Create new room if it doesn't exist
 		room := &Room{
@@ -93,7 +96,56 @@ func joinRoom(conn *websocket.Conn, roomID string) {
 		}
 		rooms[roomID] = room
 		go room.run()
-		room.Register <- conn
+		registerClientToRoom(room, conn, clientID, clientName)
+	}
+}
+
+func registerClientToRoom(room *Room, conn *websocket.Conn, clientID string, clientName string) {
+	clientInfo := &ClientInfo{
+		ID:       clientID,
+		Name:     clientName,
+		Conn:     conn,
+		JoinedAt: time.Now(),
+	}
+
+	// Send existing participants to the new client
+	for existingClient, existingClientInfo := range room.Clients {
+		if existingClient != conn {
+			existingUserMsg := Message{
+				Type:       "existing-user",
+				ClientID:   existingClientInfo.ID,
+				ClientName: existingClientInfo.Name,
+				RoomID:     room.ID,
+			}
+			data, _ := json.Marshal(existingUserMsg)
+			err := conn.WriteMessage(websocket.TextMessage, data)
+			if err != nil {
+				log.Printf("WebSocket write error sending existing user to new client: %v", err)
+			}
+		}
+	}
+
+	// Add the new client to the room
+	room.Clients[conn] = clientInfo
+	log.Printf("Client %s (%s) joined room %s. Total clients: %d", clientInfo.Name, clientInfo.ID, room.ID, len(room.Clients))
+
+	// Notify existing clients about new user
+	userJoinedMsg := Message{
+		Type:       "user-joined",
+		ClientID:   clientInfo.ID,
+		ClientName: clientInfo.Name,
+		RoomID:     room.ID,
+	}
+	data, _ := json.Marshal(userJoinedMsg)
+	for otherClient := range room.Clients {
+		if otherClient != conn {
+			err := otherClient.WriteMessage(websocket.TextMessage, data)
+			if err != nil {
+				log.Printf("WebSocket write error: %v", err)
+				otherClient.Close()
+				delete(room.Clients, otherClient)
+			}
+		}
 	}
 }
 
@@ -106,40 +158,30 @@ func leaveRoom(conn *websocket.Conn, roomID string) {
 func relayMessage(msg Message) {
 	if room, exists := rooms[msg.RoomID]; exists {
 		data, _ := json.Marshal(msg)
-		room.Broadcast <- data
+
+		// If TargetID is specified, send only to that client
+		if msg.TargetID != "" {
+			for client, clientInfo := range room.Clients {
+				if clientInfo.ID == msg.TargetID {
+					err := client.WriteMessage(websocket.TextMessage, data)
+					if err != nil {
+						log.Printf("WebSocket write error: %v", err)
+						client.Close()
+						delete(room.Clients, client)
+					}
+					return
+				}
+			}
+		} else {
+			// Broadcast to all clients if no target specified
+			room.Broadcast <- data
+		}
 	}
 }
 
 func (r *Room) run() {
 	for {
 		select {
-		case client := <-r.Register:
-			clientInfo := &ClientInfo{
-				ID:       generateClientID(),
-				Conn:     client,
-				JoinedAt: time.Now(),
-			}
-			r.Clients[client] = clientInfo
-			log.Printf("Client %s joined room %s. Total clients: %d", clientInfo.ID, r.ID, len(r.Clients))
-
-			// Notify existing clients about new user
-			userJoinedMsg := Message{
-				Type:     "user-joined",
-				ClientID: clientInfo.ID,
-				RoomID:   r.ID,
-			}
-			data, _ := json.Marshal(userJoinedMsg)
-			for otherClient := range r.Clients {
-				if otherClient != client {
-					err := otherClient.WriteMessage(websocket.TextMessage, data)
-					if err != nil {
-						log.Printf("WebSocket write error: %v", err)
-						otherClient.Close()
-						delete(r.Clients, otherClient)
-					}
-				}
-			}
-
 		case client := <-r.Unregister:
 			if clientInfo, ok := r.Clients[client]; ok {
 				log.Printf("Client %s left room %s. Total clients: %d", clientInfo.ID, r.ID, len(r.Clients)-1)

@@ -1,8 +1,10 @@
 export interface SignalingMessage {
-  type: 'offer' | 'answer' | 'ice-candidate' | 'join-room' | 'leave-room' | 'user-joined' | 'user-left';
+  type: 'offer' | 'answer' | 'ice-candidate' | 'join-room' | 'leave-room' | 'user-joined' | 'existing-user' | 'user-left';
   data?: any;
   roomId?: string;
   clientId?: string;
+  clientName?: string;
+  targetId?: string;
 }
 
 export interface PeerConnection {
@@ -21,7 +23,8 @@ export class WebRTCService {
   // Event callbacks
   public onLocalStream?: (stream: MediaStream) => void;
   public onRemoteStream?: (clientId: string, stream: MediaStream) => void;
-  public onUserJoined?: (clientId: string) => void;
+  public onUserJoined?: (clientId: string, clientName?: string) => void;
+  public onExistingUser?: (clientId: string, clientName?: string) => void;
   public onUserLeft?: (clientId: string) => void;
   public onConnectionStateChange?: (clientId: string, state: RTCPeerConnectionState) => void;
 
@@ -83,9 +86,9 @@ export class WebRTCService {
     });
   }
 
-  async joinRoom(roomId: string): Promise<void> {
+  async joinRoom(roomId: string, userName: string): Promise<void> {
     this.roomId = roomId;
-    
+
     if (!this.websocket) {
       throw new Error('Not connected to signaling server');
     }
@@ -93,7 +96,8 @@ export class WebRTCService {
     const message: SignalingMessage = {
       type: 'join-room',
       roomId: roomId,
-      clientId: this.clientId
+      clientId: this.clientId,
+      clientName: userName
     };
 
     this.websocket.send(JSON.stringify(message));
@@ -101,13 +105,22 @@ export class WebRTCService {
 
   private async handleSignalingMessage(message: SignalingMessage): Promise<void> {
     console.log('Received signaling message:', message);
+    console.log('Message type:', message.type, 'ClientID:', message.clientId, 'ClientName:', message.clientName);
 
     switch (message.type) {
+      case 'existing-user':
+        if (message.clientId && message.clientId !== this.clientId) {
+          if (this.onExistingUser) {
+            this.onExistingUser(message.clientId, message.clientName);
+          }
+        }
+        break;
+
       case 'user-joined':
         if (message.clientId && message.clientId !== this.clientId) {
           await this.createOffer(message.clientId);
           if (this.onUserJoined) {
-            this.onUserJoined(message.clientId);
+            this.onUserJoined(message.clientId, message.clientName);
           }
         }
         break;
@@ -177,7 +190,8 @@ export class WebRTCService {
           type: 'ice-candidate',
           data: event.candidate,
           roomId: this.roomId!,
-          clientId: this.clientId
+          clientId: this.clientId,
+          targetId: clientId
         };
         this.websocket.send(JSON.stringify(message));
       }
@@ -212,7 +226,8 @@ export class WebRTCService {
           type: 'offer',
           data: offer,
           roomId: this.roomId!,
-          clientId: this.clientId
+          clientId: this.clientId,
+          targetId: clientId
         };
         this.websocket.send(JSON.stringify(message));
       }
@@ -234,7 +249,8 @@ export class WebRTCService {
           type: 'answer',
           data: answer,
           roomId: this.roomId!,
-          clientId: this.clientId
+          clientId: this.clientId,
+          targetId: clientId
         };
         this.websocket.send(JSON.stringify(message));
       }

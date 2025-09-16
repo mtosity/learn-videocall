@@ -2,6 +2,7 @@ import React from 'react';
 
 interface Participant {
   id: string;
+  name?: string;
   stream?: MediaStream;
   isLocal?: boolean;
   connectionState?: RTCPeerConnectionState;
@@ -15,9 +16,7 @@ const ParticipantsList: React.FC<ParticipantsListProps> = ({ participants }) => 
 
   const getDisplayName = (participant: Participant) => {
     if (participant.isLocal) return 'You';
-    return participant.id.startsWith('client-') 
-      ? `User ${participant.id.slice(-4)}` 
-      : participant.id;
+    return participant.name || `User ${participant.id.slice(-4)}`;
   };
 
   return (

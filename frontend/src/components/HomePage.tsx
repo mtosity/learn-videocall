@@ -2,14 +2,20 @@ import React, { useState } from 'react';
 import { Button } from './ui/button';
 
 interface HomePageProps {
-  onJoinRoom: (roomId: string) => void;
+  onJoinRoom: (roomId: string, userName: string) => void;
 }
 
 const HomePage: React.FC<HomePageProps> = ({ onJoinRoom }) => {
   const [roomId, setRoomId] = useState('');
+  const [userName, setUserName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
   const createRoom = async () => {
+    if (!userName.trim()) {
+      alert('Please enter your name before creating a room');
+      return;
+    }
+
     setIsCreating(true);
     try {
       const response = await fetch('http://localhost:8080/api/rooms', {
@@ -18,10 +24,10 @@ const HomePage: React.FC<HomePageProps> = ({ onJoinRoom }) => {
           'Content-Type': 'application/json',
         },
       });
-      
+
       if (response.ok) {
         const data = await response.json();
-        onJoinRoom(data.roomId);
+        onJoinRoom(data.roomId, userName.trim());
       } else {
         console.error('Failed to create room');
       }
@@ -33,9 +39,15 @@ const HomePage: React.FC<HomePageProps> = ({ onJoinRoom }) => {
   };
 
   const joinExistingRoom = () => {
-    if (roomId.trim()) {
-      onJoinRoom(roomId.trim());
+    if (!userName.trim()) {
+      alert('Please enter your name before joining a room');
+      return;
     }
+    if (!roomId.trim()) {
+      alert('Please enter a room code');
+      return;
+    }
+    onJoinRoom(roomId.trim(), userName.trim());
   };
 
 
@@ -64,12 +76,28 @@ const HomePage: React.FC<HomePageProps> = ({ onJoinRoom }) => {
             </p>
           </div>
 
+          {/* Name Input */}
+          <div className="space-y-2">
+            <label htmlFor="userName" className="block text-sm font-medium text-gray-700">
+              Your name
+            </label>
+            <input
+              id="userName"
+              type="text"
+              placeholder="Enter your name"
+              value={userName}
+              onChange={(e) => setUserName(e.target.value)}
+              className="w-full px-3 py-2 border border-input rounded-md text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+              maxLength={50}
+            />
+          </div>
+
           {/* Action Buttons */}
           <div className="space-y-4">
-            <Button 
-              onClick={createRoom} 
-              disabled={isCreating}
-              className="w-full h-12 bg-blue-600 hover:bg-blue-700 text-white"
+            <Button
+              onClick={createRoom}
+              disabled={isCreating || !userName.trim()}
+              className="w-full h-12 bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
               size="lg"
             >
               {isCreating ? (
@@ -109,11 +137,11 @@ const HomePage: React.FC<HomePageProps> = ({ onJoinRoom }) => {
                   }
                 }}
               />
-              <Button 
+              <Button
                 onClick={joinExistingRoom}
-                disabled={!roomId.trim()}
+                disabled={!roomId.trim() || !userName.trim()}
                 variant="outline"
-                className="px-6"
+                className="px-6 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Join
               </Button>

@@ -7,17 +7,19 @@ import { Button } from './ui/button';
 
 interface VideoCallRoomProps {
   roomId: string;
+  userName: string;
   onLeaveRoom: () => void;
 }
 
 interface Participant {
   id: string;
+  name?: string;
   stream?: MediaStream;
   isLocal?: boolean;
   connectionState?: RTCPeerConnectionState;
 }
 
-const VideoCallRoom: React.FC<VideoCallRoomProps> = ({ roomId, onLeaveRoom }) => {
+const VideoCallRoom: React.FC<VideoCallRoomProps> = ({ roomId, userName, onLeaveRoom }) => {
   const [participants, setParticipants] = useState<Map<string, Participant>>(new Map());
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
@@ -27,7 +29,14 @@ const VideoCallRoom: React.FC<VideoCallRoomProps> = ({ roomId, onLeaveRoom }) =>
   const webrtcServiceRef = useRef<WebRTCService | null>(null);
 
   const initializeWebRTC = useCallback(async () => {
+    // Prevent multiple initializations
+    if (webrtcServiceRef.current) {
+      console.log('WebRTC service already initialized, skipping...');
+      return;
+    }
+
     try {
+      console.log('Initializing WebRTC service...');
       const webrtcService = new WebRTCService();
       webrtcServiceRef.current = webrtcService;
 
@@ -37,6 +46,7 @@ const VideoCallRoom: React.FC<VideoCallRoomProps> = ({ roomId, onLeaveRoom }) =>
           const updated = new Map(prev);
           updated.set('local', {
             id: 'local',
+            name: userName,
             stream,
             isLocal: true
           });
@@ -45,27 +55,54 @@ const VideoCallRoom: React.FC<VideoCallRoomProps> = ({ roomId, onLeaveRoom }) =>
       };
 
       webrtcService.onRemoteStream = (clientId: string, stream: MediaStream) => {
+        console.log('Received remote stream from:', clientId);
         setParticipants(prev => {
           const updated = new Map(prev);
+          const existingParticipant = updated.get(clientId);
           updated.set(clientId, {
             id: clientId,
+            name: existingParticipant?.name, // Preserve existing name
             stream,
-            isLocal: false
+            isLocal: false,
+            connectionState: existingParticipant?.connectionState
           });
+          console.log('Updated participant with stream:', updated.get(clientId));
           return updated;
         });
       };
 
-      webrtcService.onUserJoined = (clientId: string) => {
-        console.log('User joined:', clientId);
+      webrtcService.onExistingUser = (clientId: string, clientName?: string) => {
+        console.log('Existing user found:', clientId, clientName);
         setParticipants(prev => {
           const updated = new Map(prev);
           if (!updated.has(clientId)) {
+            console.log('Adding existing participant:', clientId, clientName);
             updated.set(clientId, {
               id: clientId,
+              name: clientName,
               isLocal: false
             });
           }
+          return updated;
+        });
+      };
+
+      webrtcService.onUserJoined = (clientId: string, clientName?: string) => {
+        console.log('New user joined:', clientId, clientName);
+        setParticipants(prev => {
+          console.log('Current participants before adding:', Array.from(prev.keys()));
+          const updated = new Map(prev);
+          if (!updated.has(clientId)) {
+            console.log('Adding new participant:', clientId, clientName);
+            updated.set(clientId, {
+              id: clientId,
+              name: clientName,
+              isLocal: false
+            });
+          } else {
+            console.log('Participant already exists:', clientId);
+          }
+          console.log('Participants after update:', Array.from(updated.keys()));
           return updated;
         });
       };
@@ -102,22 +139,26 @@ const VideoCallRoom: React.FC<VideoCallRoomProps> = ({ roomId, onLeaveRoom }) =>
       setConnectionStatus('connected');
       
       // Join room
-      await webrtcService.joinRoom(roomId);
+      await webrtcService.joinRoom(roomId, userName);
 
     } catch (error) {
       console.error('Failed to initialize WebRTC:', error);
       setError('Failed to access camera and microphone. Please check permissions.');
       setConnectionStatus('disconnected');
     }
-  }, [roomId]);
+  }, [roomId, userName]);
 
   useEffect(() => {
     initializeWebRTC();
 
     return () => {
       if (webrtcServiceRef.current) {
+        console.log('Cleaning up WebRTC service...');
         webrtcServiceRef.current.leaveRoom();
+        webrtcServiceRef.current = null;
       }
+      // Clear participants when leaving
+      setParticipants(new Map());
     };
   }, [initializeWebRTC]);
 
@@ -220,7 +261,7 @@ const VideoCallRoom: React.FC<VideoCallRoomProps> = ({ roomId, onLeaveRoom }) =>
                 <VideoPlayer
                   stream={participant.stream}
                   isLocal={false}
-                  participantId={participant.id}
+                  participantId={participant.name || participant.id}
                   connectionState={participant.connectionState}
                 />
               </div>
@@ -231,7 +272,7 @@ const VideoCallRoom: React.FC<VideoCallRoomProps> = ({ roomId, onLeaveRoom }) =>
                 <VideoPlayer
                   stream={localParticipant.stream}
                   isLocal={true}
-                  participantId="You"
+                  participantId={localParticipant.name || "You"}
                   muted={true}
                   isVideoEnabled={isVideoEnabled}
                 />
@@ -247,7 +288,7 @@ const VideoCallRoom: React.FC<VideoCallRoomProps> = ({ roomId, onLeaveRoom }) =>
                   <VideoPlayer
                     stream={localParticipant.stream}
                     isLocal={true}
-                    participantId="You"
+                    participantId={localParticipant.name || "You"}
                     muted={true}
                     isVideoEnabled={isVideoEnabled}
                   />
